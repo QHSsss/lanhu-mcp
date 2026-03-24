@@ -305,7 +305,7 @@ https://lanhuapp.com/web/#/item/project/product?tid=xxx&pid=xxx&docId=xxx
 ### UI 设计稿查看
 
 ```
-请帮我看看这个设计稿：
+请帮我用mcp看看这个设计稿：
 https://lanhuapp.com/web/#/item/project/stage?tid=xxx&pid=xxx
 ```
 
@@ -314,7 +314,7 @@ https://lanhuapp.com/web/#/item/project/stage?tid=xxx&pid=xxx
 ### 切图下载
 
 ```
-帮我下载"首页设计"的所有切图
+帮我用mcp下载"首页设计"的所有切图
 ```
 
 AI 会自动：
