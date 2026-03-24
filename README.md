@@ -531,7 +531,7 @@ lanhu_say(
 
 **1. 获取页面列表**
 ```
-请帮我看看这个需求文档：
+请帮我用mcp看看这个需求文档：
 https://lanhuapp.com/web/#/item/project/product?tid=xxx&pid=xxx&docId=xxx
 ```
 
