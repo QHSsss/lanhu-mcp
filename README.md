@@ -25,7 +25,6 @@
 
 ---
 
-
 ## 🌟 项目亮点
 
 一个功能强大的 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 服务器，专为 AI 编程时代设计，完美支持蓝湖（Lanhu）设计协作平台。
@@ -279,6 +278,12 @@ docker-compose down              # 停止
 > - `role`: 用户角色（Developer/Frontend/Backend/Tester/Product 等）
 > - `name`: 用户姓名（用于协作追踪和 @提醒）
 > - ⚠️ **注意**：部分 AI 开发工具不支持 URL 中使用中文参数值，建议使用英文
+
+## 🎯 提升 UI 还原度
+
+开启蓝湖的**设计稿转代码**功能可以显著提升 UI 还原度。如果遇到提示无法转换的问题，需要让 UI 设计师升级蓝湖插件版本后重新上传设计稿。
+
+---
 
 ## ✨保持关注
 
