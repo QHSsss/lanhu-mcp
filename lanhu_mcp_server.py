@@ -1480,43 +1480,88 @@ def minify_html(html: str) -> str:
 def _localize_image_urls(html_code: str, design_name: str) -> tuple[str, dict]:
     """
     将生成的 HTML 中的远程图片 URL 替换为本地路径占位符，并返回下载映射表。
-    处理 <img src="..."> 和 CSS url(...) 中的远程地址。
+    文件名优先使用 CSS 类名（img class 属性 / CSS 规则选择器），退而使用计数器。
+    同一 URL 复用同一本地路径（相同图片不重复下载）。
     """
-    url_mapping = {}
+    url_to_localpath: dict[str, str] = {}  # remote_url -> local_path, dedup
+    url_mapping: dict[str, str] = {}       # local_path -> remote_url
+    used_names: set[str] = set()
     counter = [0]
 
-    def _make_local_name(remote_url: str) -> str:
-        parsed = urlparse(remote_url)
-        path = parsed.path
-        ext = '.png'
+    def _get_ext(remote_url: str) -> str:
+        path = urlparse(remote_url).path
         if '.' in path.split('/')[-1]:
             ext = '.' + path.split('/')[-1].rsplit('.', 1)[-1]
-            if ext not in ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'):
-                ext = '.png'
-        counter[0] += 1
-        return f"img_{counter[0]}{ext}"
+            if ext in ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'):
+                return ext
+        return '.png'
 
-    def _replace_img_src(match):
-        url = match.group(1)
-        if not url or not url.startswith('http'):
-            return match.group(0)
-        local_name = _make_local_name(url)
-        local_path = f"./assets/slices/{local_name}"
-        url_mapping[local_path] = url
-        return f'src="{local_path}"'
+    def _sanitize(name: str) -> str:
+        """去除循环后缀（-0/-1/...），保留主类名。"""
+        return re.sub(r'-\d+$', '', name)
 
+    def _unique_name(base: str, ext: str) -> str:
+        candidate = f"{base}{ext}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        i = 2
+        while True:
+            candidate = f"{base}_{i}{ext}"
+            if candidate not in used_names:
+                used_names.add(candidate)
+                return candidate
+            i += 1
+
+    def _get_localpath(remote_url: str, hint_class: str = None) -> str:
+        if remote_url in url_to_localpath:
+            return url_to_localpath[remote_url]
+        ext = _get_ext(remote_url)
+        if hint_class:
+            base = _sanitize(hint_class)
+        else:
+            counter[0] += 1
+            base = f"img_{counter[0]}"
+        name = _unique_name(base, ext)
+        local_path = f"./assets/slices/{name}"
+        url_mapping[local_path] = remote_url
+        url_to_localpath[remote_url] = local_path
+        return local_path
+
+    # Step 1: 从 CSS 规则中收集 url -> class_name 映射
+    # 格式：.classname { ... background: url(https://...) ... }
+    url_to_css_class: dict[str, str] = {}
+    css_block = re.search(r'<style>(.*?)</style>', html_code, re.DOTALL)
+    if css_block:
+        for rule_m in re.finditer(r'\.([\w-]+)\s*\{([^}]*)\}', css_block.group(1), re.DOTALL):
+            cls = rule_m.group(1)
+            for url_m in re.finditer(r'url\([\'"]?(https?://[^\'") ]+)[\'"]?', rule_m.group(2)):
+                url_to_css_class.setdefault(url_m.group(1), cls)
+
+    # Step 2: 替换 <img src="...">，优先用 img 的 class 属性
+    def _replace_img_tag(tag_match):
+        tag = tag_match.group(0)
+        src_m = re.search(r'src=["\']?(https?://[^"\'>\s]+)["\']?', tag)
+        if not src_m:
+            return tag
+        url = src_m.group(1)
+        cls_m = re.search(r'class=["\']([^"\']+)["\']', tag) or re.search(r'class=([^"\'>\s]+)', tag)
+        hint = cls_m.group(1).split()[0] if cls_m else url_to_css_class.get(url)
+        local_path = _get_localpath(url, hint)
+        return tag[:src_m.start(1) - tag_match.start()] + local_path + tag[src_m.end(1) - tag_match.start():]
+
+    # 先整体替换 <img> 标签（以保留 class 上下文）
+    result = re.sub(r'<img\b[^>]*>', _replace_img_tag, html_code)
+
+    # Step 3: 替换 CSS url(...) 背景图，用 CSS 类名作文件名
     def _replace_css_url(match):
         url = match.group(1).strip('\'"')
         if not url or not url.startswith('http'):
             return match.group(0)
-        local_name = _make_local_name(url)
-        local_path = f"./assets/slices/{local_name}"
-        url_mapping[local_path] = url
+        hint = url_to_css_class.get(url)
+        local_path = _get_localpath(url, hint)
         return f"url('{local_path}')"
 
-    result = re.sub(r'src="(https?://[^"]*)"', _replace_img_src, html_code)
-    result = re.sub(r"src='(https?://[^']*)'", _replace_img_src, result)
-    result = re.sub(r'src=(https?://[^\s>\'\"]+)', _replace_img_src, result)
     result = re.sub(r'url\(([\'"]*https?://[^\)]*)\)', _replace_css_url, result)
 
     return result, url_mapping
@@ -5099,6 +5144,8 @@ async def lanhu_get_ai_analyze_design_result(
         summary_text += "STEP 2 - 下载图片资源到本地（必须在生成代码前完成）：\n"
         summary_text += "  下方每个设计图的 HTML 代码中，图片已替换为本地路径（./assets/slices/xxx.png）\n"
         summary_text += "  每个设计图下方附有「图片资源下载映射」，列出 本地路径 ← 远程下载地址\n"
+        summary_text += "  文件名已按 CSS 类名生成（如 thumbnail_54.png、group_1.png），具备初步语义。\n"
+        summary_text += "  ⚠️ 若文件名仍不够语义化，在下载时重命名为更清晰的英文名，并同步更新 HTML 中的路径引用。\n"
         summary_text += "  必须按映射表下载所有图片到项目本地 assets 目录：\n"
         summary_text += "    macOS/Linux → curl -o <path> \"<url>\"\n"
         summary_text += "    Windows → PowerShell Invoke-WebRequest -Uri \"<url>\" -OutFile <path>\n"
@@ -5452,8 +5499,14 @@ async def lanhu_get_design_slices(
                 },
                 {
                     "step": 3,
-                    "title": "文件命名规范（与蓝湖官方下载保持一致）",
-                    "primary_rule": "文件名直接使用 slice.name（图层原始名），不要自行翻译或缩写",
+                    "title": "文件命名规范",
+                    "primary_rule": "根据用户项目命名规范对 slice.name 进行语义化英文重命名，再加倍率后缀",
+                    "naming_workflow": [
+                        "1. 读取用户项目已有切图/资源文件，识别命名风格（snake_case / camelCase / kebab-case 等）",
+                        "2. 将 slice.name（可能是中文）翻译并语义化为英文，遵循识别到的命名风格",
+                        "3. 无法识别风格时默认 snake_case（如 icon_share、btn_confirm、img_empty_state）",
+                        "4. 加倍率后缀"
+                    ],
                     "scale_suffix_convention": {
                         "Web 1x":  "{name}.png",
                         "Web 2x":  "{name}@2x.png",
@@ -5467,19 +5520,14 @@ async def lanhu_get_design_slices(
                         "Android xxhdpi":  "mipmap-xxhdpi/{name}.png",
                         "Android xxxhdpi": "mipmap-xxxhdpi/{name}.png"
                     },
-                    "examples": [
-                        {
-                            "slice_name": "线",
-                            "Web 1x+2x": ["线.png", "线@2x.png"],
-                            "iOS all":   ["线.png", "线@2x.png", "线@3x.png"],
-                            "Android all": ["mipmap-mdpi/线.png", "mipmap-xhdpi/线.png", "mipmap-xxxhdpi/线.png"]
-                        },
-                        {
-                            "slice_name": "img_成功申请精装",
-                            "Web 1x+2x": ["img_成功申请精装.png", "img_成功申请精装@2x.png"]
-                        }
+                    "rename_examples": [
+                        {"slice_name": "线",           "renamed": "icon_line",            "Web 2x": "icon_line@2x.png"},
+                        {"slice_name": "img_成功申请精装", "renamed": "img_apply_success",   "Web 2x": "img_apply_success@2x.png"},
+                        {"slice_name": "申请被驳回",    "renamed": "img_apply_rejected",   "Web 2x": "img_apply_rejected@2x.png"},
+                        {"slice_name": "草地大背景",    "renamed": "bg_grass",             "Web 2x": "bg_grass@2x.png"},
+                        {"slice_name": "icon-导出",     "renamed": "icon_export",          "Web 2x": "icon_export@2x.png"}
                     ],
-                    "duplicate_handling": "同名切图按蓝湖规则加括号序号：线.png / 线(1).png / 线(2).png"
+                    "duplicate_handling": "同名切图加序号后缀：icon_line.png / icon_line_2.png / icon_line_3.png"
                 },
                 {
                     "step": 4,
@@ -6228,7 +6276,7 @@ if __name__ == "__main__":
     # 运行MCP服务器
     # 使用HTTP传输方式，支持环境变量配置
     SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
-    SERVER_PORT = int(os.getenv("SERVER_PORT", "8100"))
+    SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
     mcp.run(transport="http", path="/mcp", host=SERVER_HOST, port=SERVER_PORT)
 
 
