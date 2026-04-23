@@ -173,33 +173,27 @@ if /i "!OPEN_FILES!"=="y" (
 echo 完成配置后，按 Enter 继续...
 pause >nul
 
-REM 读取 .env 文件中的 Cookie
-set LANHU_COOKIE=
-for /f "tokens=1,* delims==" %%a in ('type .env ^| findstr /B "LANHU_COOKIE="') do (
-    set "LANHU_COOKIE=%%b"
-)
-
-REM 移除引号
-set LANHU_COOKIE=%LANHU_COOKIE:"=%
-
-REM 验证 Cookie 不为空
-if "!LANHU_COOKIE!"=="" (
-    echo ❌ Cookie 未配置或配置不正确
+REM 直接检查 .env 文件，避免把整串 Cookie 读入 CMD 变量后触发特殊字符解析
+findstr /B /C:"LANHU_COOKIE=" .env >nul
+if errorlevel 1 (
+    echo ❌ 未找到 LANHU_COOKIE 配置
     echo 请确保在 .env 文件中正确设置了 LANHU_COOKIE
     pause
     exit /b 1
 )
 
-if "!LANHU_COOKIE!"=="your_lanhu_cookie_here" (
+REM 检查是否仍然是默认占位值
+findstr /B /C:"LANHU_COOKIE=\"your_lanhu_cookie_here\"" .env >nul
+if not errorlevel 1 (
     echo ❌ Cookie 未修改，请在 .env 文件中设置正确的 Cookie
     pause
     exit /b 1
 )
 
-REM 简单验证 Cookie 格式
-echo !LANHU_COOKIE! | findstr /C:"session=" >nul
+REM 只做文件内容校验，避免 CMD 解析 Cookie 中的特殊字符
+findstr /C:"session=" .env >nul
 if errorlevel 1 (
-    echo !LANHU_COOKIE! | findstr /C:"user_token=" >nul
+    findstr /C:"user_token=" .env >nul
     if errorlevel 1 (
         echo ⚠️  Cookie 格式可能不正确
         set /p CONTINUE_ANYWAY="确定要继续吗？(y/n) [n]: "
